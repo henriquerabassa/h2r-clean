@@ -664,11 +664,13 @@ class H2RCleanGUI:
         elif license_type == 'pro':
             actions.append(('⏰ Limpeza Agendada', self.scheduled_clean, 'pro'))
             actions.append(('📊 Relatório Detalhado', self.generate_detailed_report_wrapper, 'pro'))
+            actions.append(('🔄 Atualizar', self.check_for_updates_and_prompt, 'update'))
         elif license_type == 'enterprise':
             actions.append(('⏰ Limpeza Agendada', self.scheduled_clean, 'pro'))
             actions.append(('📊 Relatório Detalhado', self.generate_detailed_report_wrapper, 'pro'))
             actions.append(('🔧 Suporte Remoto', self.remote_support_session, 'enterprise'))
             actions.append(('📈 Dashboard', self.open_corporate_dashboard, 'enterprise'))
+            actions.append(('🔄 Atualizar', self.check_for_updates_and_prompt, 'update'))
         
         for i, (text, command, btn_type) in enumerate(actions):
             row, col = divmod(i, 4)
@@ -845,9 +847,55 @@ class H2RCleanGUI:
         """Wrapper para suporte remoto"""
         self.organizer.remote_support_session()
     
-    def open_corporate_dashboard(self):
-        """Wrapper para dashboard corporativo"""
-        self.organizer.open_corporate_dashboard()
+    def check_for_updates(self):
+        """Verifica se há atualizações disponíveis"""
+        try:
+            # Obter versão atual
+            current_version = "2.1"  # Versão atual
+            
+            # Simular verificação online (em produção, buscaria API real)
+            import requests
+            response = requests.get("https://api.github.com/repos/henriquerabassa/h2r-clean/releases/latest", timeout=5)
+            
+            if response.status_code == 200:
+                latest_release = response.json()
+                latest_version = latest_release.get('tag_name', '').replace('v', '')
+                
+                if latest_version > current_version:
+                    return {
+                        'update_available': True,
+                        'current_version': current_version,
+                        'latest_version': latest_version,
+                        'download_url': latest_release.get('html_url'),
+                        'release_notes': latest_release.get('body', '')[:200] + '...'
+                    }
+            
+            return {'update_available': False, 'current_version': current_version}
+            
+        except Exception as e:
+            print(f"Erro ao verificar atualizações: {e}")
+            return {'update_available': False, 'current_version': '2.1'}
+    
+    def check_for_updates_and_prompt(self):
+        """Verifica atualizações e prompt para atualizar"""
+        try:
+            self.log_message("🔄 Verificando atualizações...")
+            update_info = self.check_for_updates()
+            
+            if update_info['update_available']:
+                message = f"Nova versão disponível!\n\nVersão Atual: {update_info['current_version']}\nVersão Mais Recente: {update_info['latest_version']}\n\n{update_info['release_notes']}\n\nDeseja atualizar agora?"
+                
+                if messagebox.askyesno("Atualização Disponível", message):
+                    self.perform_update(update_info)
+                else:
+                    self.log_message("ℹ️ Atualização cancelada pelo usuário")
+            else:
+                self.log_message("✅ Você já está na versão mais recente!")
+                messagebox.showinfo("Atualizações", "Você já está na versão mais recente!")
+                
+        except Exception as e:
+            self.log_message(f"❌ Erro ao verificar atualizações: {e}")
+            messagebox.showerror("Erro", f"Falha ao verificar atualizações: {e}")
     
     def setup_results_area(self, parent):
         """Configura área de resultados"""
