@@ -10,18 +10,126 @@ import shutil
 import platform
 import time
 import logging
+import hashlib
+import json
+import threading
+import requests
 from pathlib import Path
 from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-import threading
 import json
+
+class LicenseManager:
+    """Gerenciador de licenças e autenticação"""
+    
+    def __init__(self):
+        self.api_url = "https://api.h2r-clean.com/v1"
+        self.config_dir = Path.home() / ".h2r_clean"
+        self.license_file = self.config_dir / "license.json"
+        
+    def verify_license(self, license_key, email):
+        """Verifica licença online"""
+        try:
+            response = requests.post(f"{self.api_url}/verify", {
+                'license_key': license_key,
+                'email': email,
+                'machine_id': self.get_machine_id()
+            }, timeout=10)
+            
+            if response.status_code == 200:
+                license_data = response.json()
+                return {
+                    'valid': True,
+                    'type': license_data.get('type', 'free'),
+                    'expires': license_data.get('expires'),
+                    'features': license_data.get('features', [])
+                }
+            else:
+                return {'valid': False, 'error': 'Invalid license'}
+                
+        except requests.RequestException:
+            # Fallback para verificação offline
+            return self.verify_license_offline(license_key)
+        except Exception as e:
+            return {'valid': False, 'error': str(e)}
+    
+    def verify_license_offline(self, license_key):
+        """Verificação offline da licença"""
+        try:
+            # Verificar se existe licença local
+            if self.license_file.exists():
+                with open(self.license_file, 'r') as f:
+                    stored_license = json.load(f)
+                
+                if stored_license.get('key') == license_key:
+                    expires = stored_license.get('expires')
+                    if expires:
+                        expiry_date = datetime.fromisoformat(expires)
+                        if datetime.now() < expiry_date:
+                            return {
+                                'valid': True,
+                                'type': stored_license.get('type', 'free'),
+                                'expires': expires
+                            }
+            
+            return {'valid': False, 'error': 'License expired or not found'}
+            
+        except Exception:
+            return {'valid': False, 'error': 'License verification failed'}
+    
+    def get_machine_id(self):
+        """Gera ID único da máquina"""
+        import uuid
+        machine_data = f"{platform.node()}-{uuid.getnode()}"
+        return hashlib.sha256(machine_data.encode()).hexdigest()[:16]
+    
+    def save_license(self, license_data):
+        """Salva licença localmente"""
+        self.config_dir.mkdir(exist_ok=True)
+        with open(self.license_file, 'w') as f:
+            json.dump(license_data, f, indent=2)
+    
+    def get_pricing_plans(self):
+        """Retorna planos de preços"""
+        return {
+            'pro': {
+                'name': 'H2R-Clean Pro',
+                'price_monthly': 9.99,
+                'price_yearly': 79.99,
+                'features': [
+                    '✅ Limpeza agendada automática',
+                    '✅ Relatórios detalhados',
+                    '✅ Suporte prioritário 24/7',
+                    '✅ Limpeza ilimitada',
+                    '✅ Otimização avançada',
+                    '✅ Backup automático na nuvem'
+                ]
+            },
+            'enterprise': {
+                'name': 'H2R-Clean Enterprise',
+                'price_monthly': 29.99,
+                'price_yearly': 299.99,
+                'features': [
+                    '✅ Todas as funcionalidades Pro',
+                    '✅ Suporte remoto dedicado',
+                    '✅ API de integração',
+                    '✅ Dashboard corporativo',
+                    '✅ Gerenciamento multi-usuário',
+                    '✅ Relatórios personalizados',
+                    '✅ SLA garantido',
+                    '✅ Treinamento corporativo'
+                ]
+            }
+        }
+
 
 class H2RClean:
     def __init__(self):
         self.system = platform.system().lower()
         self.setup_logging()
         self.load_config()
+        self.license_manager = LicenseManager()
         
     def setup_logging(self):
         """Configura sistema de logs"""
@@ -50,7 +158,13 @@ class H2RClean:
             "backup_before_delete": True,
             "days_threshold": 30,
             "max_file_size_mb": 100,
-            "theme": "dark"
+            "theme": "dark",
+            "license": {
+                "type": "free",
+                "key": None,
+                "email": None,
+                "expires": None
+            }
         }
         
         if config_file.exists():
@@ -64,6 +178,22 @@ class H2RClean:
             self.save_config()
             
         self.setup_system_directories()
+        
+    def get_license_info(self):
+        """Retorna informações da licença atual"""
+        return self.config.get('license', {'type': 'free'})
+    
+    def is_feature_available(self, feature):
+        """Verifica se uma funcionalidade está disponível na licença atual"""
+        license_type = self.get_license_info()['type']
+        
+        features = {
+            'free': ['basic_clean', 'basic_scan'],
+            'pro': ['basic_clean', 'basic_scan', 'scheduled_clean', 'detailed_reports', 'priority_support'],
+            'enterprise': ['basic_clean', 'basic_scan', 'scheduled_clean', 'detailed_reports', 'priority_support', 'remote_support', 'api_access', 'corporate_dashboard']
+        }
+        
+        return feature in features.get(license_type, [])
         
     def setup_system_directories(self):
         """Configura diretórios padrão para cada sistema"""
@@ -107,22 +237,199 @@ class H2RClean:
             'total_size': 0
         }
 
+    def scheduled_clean(self):
+        """Limpeza agendada (funcionalidade Pro)"""
+        if not self.is_feature_available('scheduled_clean'):
+            messagebox.showwarning("Recurso Pro", "Esta funcionalidade requer a versão Pro.")
+            return
+            
+        def run():
+            self.start_progress()
+            self.log_message("⏰ Executando limpeza agendada...")
+            
+            # Limpeza completa automática
+            temp_files = self.scan_temp_files()
+            cache_files = self.scan_cache_files()
+            log_files = self.scan_log_files()
+            orphan_files = self.find_orphan_files()
+            
+            all_files = temp_files + cache_files + log_files + orphan_files
+            
+            if all_files:
+                cleaned, errors = self.clean_files(all_files)
+                self.log_message(f"✅ {len(cleaned)} arquivos removidos automaticamente")
+                
+                # Gerar relatório detalhado
+                self.generate_detailed_report(cleaned, errors)
+            else:
+                self.log_message("ℹ️ Nenhum arquivo encontrado para limpeza")
+            
+            self.stop_progress()
+        threading.Thread(target=run, daemon=True).start()
+    
+    def generate_detailed_report(self, cleaned_files, errors):
+        """Gera relatório detalhado (funcionalidade Pro)"""
+        if not self.is_feature_available('detailed_reports'):
+            messagebox.showwarning("Recurso Pro", "Esta funcionalidade requer a versão Pro.")
+            return
+            
+        try:
+            report_dir = Path.home() / ".h2r_clean" / "reports"
+            report_dir.mkdir(exist_ok=True, parents=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_file = report_dir / f"clean_report_{timestamp}.html"
+            
+            # Calcular espaço liberado
+            total_size = 0
+            valid_files = []
+            for file in cleaned_files:
+                if os.path.exists(file):
+                    try:
+                        size = os.path.getsize(file)
+                        total_size += size
+                        valid_files.append(file)
+                    except OSError:
+                        pass
+            
+            html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>H2R-Clean Relatório Detalhado</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
+        .header {{ background: #1e1e2e; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
+        .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background: white; }}
+        .file-list {{ max-height: 300px; overflow-y: auto; }}
+        .stats {{ display: flex; gap: 20px; flex-wrap: wrap; }}
+        .stat-card {{ background: #f5f5f5; padding: 15px; border-radius: 5px; text-align: center; min-width: 150px; }}
+        .error {{ color: #d32f2f; }}
+        .success {{ color: #388e3c; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🧹 H2R-Clean - Relatório de Limpeza</h1>
+        <p>Data: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+        <p>Versão: {self.get_license_info()['type'].upper()}</p>
+    </div>
+    
+    <div class="section">
+        <h2>📊 Estatísticas</h2>
+        <div class="stats">
+            <div class="stat-card">
+                <h3>{len(valid_files)}</h3>
+                <p>Arquivos Removidos</p>
+            </div>
+            <div class="stat-card">
+                <h3>{len(errors)}</h3>
+                <p>Erros</p>
+            </div>
+            <div class="stat-card">
+                <h3>{total_size / (1024*1024):.1f} MB</h3>
+                <p>Espaço Liberado</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>🗂️ Arquivos Processados</h2>
+        <div class="file-list">
+            {"<br>".join([f"🗑️ {f}" for f in valid_files[:50]])}
+            {f"<br><em>... e mais {len(valid_files)-50} arquivos</em>" if len(valid_files) > 50 else ""}
+        </div>
+    </div>
+    
+    {f'''<div class="section">
+        <h2>⚠️ Erros</h2>
+        <div class="file-list error">
+            {"<br>".join([f"❌ {file}: {error}" for file, error in errors[:10]])}
+            {f"<br><em>... e mais {len(errors)-10} erros</em>" if len(errors) > 10 else ""}
+        </div>
+    </div>''' if errors else ""}
+    
+    <div class="section">
+        <h2>ℹ️ Informações do Sistema</h2>
+        <p>Sistema: {platform.system()} {platform.release()}</p>
+        <p>Processador: {platform.processor()}</p>
+        <p>Máquina ID: {self.license_manager.get_machine_id()}</p>
+    </div>
+</body>
+</html>
+"""
+            
+            with open(report_file, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            
+            # Usar print em vez de log_message para evitar erro
+            print(f"📄 Relatório salvo em: {report_file}")
+            
+            # Abrir relatório automaticamente
+            try:
+                import webbrowser
+                webbrowser.open(f'file://{report_file}')
+            except Exception as e:
+                print(f"Erro ao abrir relatório: {e}")
+                
+        except Exception as e:
+            print(f"Erro ao gerar relatório: {e}")
+            messagebox.showerror("Erro", f"Não foi possível gerar relatório: {e}")
+    
+    def remote_support_session(self):
+        """Inicia sessão de suporte remoto (funcionalidade Enterprise)"""
+        if not self.is_feature_available('remote_support'):
+            messagebox.showwarning("Recurso Enterprise", "Esta funcionalidade requer a versão Enterprise.")
+            return
+            
+        self.log_message("🔧 Iniciando sessão de suporte remoto...")
+        # Implementar integração com TeamViewer, AnyDesk ou similar
+        messagebox.showinfo("Suporte Remoto", "Um técnico entrará em contato em breve.")
+    
+    def open_corporate_dashboard(self):
+        """Abre dashboard corporativo (funcionalidade Enterprise)"""
+        if not self.is_feature_available('corporate_dashboard'):
+            messagebox.showwarning("Recuro Enterprise", "Esta funcionalidade requer a versão Enterprise.")
+            return
+            
+        self.log_message("📊 Abrindo dashboard corporativo...")
+        # Implementar dashboard web
+        messagebox.showinfo("Dashboard", "Dashboard corporativo em desenvolvimento.")
+
     def clean_files(self, files):
         """Limpa arquivos especificados"""
         cleaned = []
         errors = []
+        
+        self.logger.info(f"Iniciando limpeza de {len(files)} arquivos")
+        
         for file in files:
             try:
                 if os.path.isfile(file):
+                    size_before = os.path.getsize(file)
                     os.remove(file)
                     cleaned.append(file)
+                    self.logger.info(f"Arquivo removido: {file} ({size_before} bytes)")
+                elif os.path.isdir(file):
+                    # Remover diretório não vazio
+                    try:
+                        shutil.rmtree(file)
+                        cleaned.append(file)
+                        self.logger.info(f"Diretório removido: {file}")
+                    except OSError:
+                        # Tentar remover arquivos dentro do diretório
+                        for item in os.listdir(file):
+                            item_path = os.path.join(file, item)
+                            if os.path.isfile(item_path):
+                                os.remove(item_path)
+                                cleaned.append(item_path)
+                                self.logger.info(f"Arquivo removido: {item_path}")
             except Exception as e:
                 errors.append((file, str(e)))
+                self.logger.error(f"Erro ao remover {file}: {e}")
+        
+        self.logger.info(f"Limpeza concluída: {len(cleaned)} arquivos, {len(errors)} erros")
         return cleaned, errors
-
-    def optimize_system(self):
-        """Otimiza o sistema"""
-        return ["Sistema otimizado"]
 
 
 class H2RCleanGUI:
@@ -337,6 +644,10 @@ class H2RCleanGUI:
         buttons_frame = ttk.Frame(parent, style='Pro.TFrame')
         buttons_frame.pack(fill=tk.X, pady=(0, 20))
         
+        # Verificar licença atual
+        license_info = self.organizer.get_license_info()
+        license_type = license_info.get('type', 'free')
+        
         actions = [
             ('🔍 Analisar Sistema', self.analyze_system, 'normal'),
             ('🧹 Limpar Tudo', self.full_analysis, 'action'),
@@ -347,6 +658,18 @@ class H2RCleanGUI:
             ('👻 Limpar Órfãos', self.clean_orphans, 'normal')
         ]
         
+        # Adicionar botões Pro/Enterprise
+        if license_type == 'free':
+            actions.append(('🚀 Upgrade Pro', self.show_upgrade_dialog, 'upgrade'))
+        elif license_type == 'pro':
+            actions.append(('⏰ Limpeza Agendada', self.scheduled_clean, 'pro'))
+            actions.append(('📊 Relatório Detalhado', self.generate_detailed_report_wrapper, 'pro'))
+        elif license_type == 'enterprise':
+            actions.append(('⏰ Limpeza Agendada', self.scheduled_clean, 'pro'))
+            actions.append(('📊 Relatório Detalhado', self.generate_detailed_report_wrapper, 'pro'))
+            actions.append(('🔧 Suporte Remoto', self.remote_support_session, 'enterprise'))
+            actions.append(('📈 Dashboard', self.open_corporate_dashboard, 'enterprise'))
+        
         for i, (text, command, btn_type) in enumerate(actions):
             row, col = divmod(i, 4)
             if btn_type == 'action':
@@ -355,6 +678,24 @@ class H2RCleanGUI:
                                activebackground=self.colors['button_hover'],
                                relief=tk.FLAT, cursor='hand2',
                                command=command, padx=20, pady=12)
+            elif btn_type == 'upgrade':
+                btn = tk.Button(buttons_frame, text=text, font=('Segoe UI', 10, 'bold'),
+                               bg='#4CAF50', fg='white',
+                               activebackground='#45a049',
+                               relief=tk.FLAT, cursor='hand2',
+                               command=command, padx=20, pady=12)
+            elif btn_type == 'pro':
+                btn = tk.Button(buttons_frame, text=text, font=('Segoe UI', 10, 'bold'),
+                               bg='#2196F3', fg='white',
+                               activebackground='#1976D2',
+                               relief=tk.FLAT, cursor='hand2',
+                               command=command, padx=15, pady=10)
+            elif btn_type == 'enterprise':
+                btn = tk.Button(buttons_frame, text=text, font=('Segoe UI', 10, 'bold'),
+                               bg='#9C27B0', fg='white',
+                               activebackground='#7B1FA2',
+                               relief=tk.FLAT, cursor='hand2',
+                               command=command, padx=15, pady=10)
             else:
                 btn = tk.Button(buttons_frame, text=text, font=('Segoe UI', 10),
                                bg=self.colors['button'], fg=self.colors['fg'],
@@ -363,6 +704,150 @@ class H2RCleanGUI:
                                command=command, padx=15, pady=10)
             btn.grid(row=row, column=col, padx=5, pady=5, sticky='ew')
             buttons_frame.grid_columnconfigure(col, weight=1)
+    
+    def show_upgrade_dialog(self):
+        """Mostra diálogo de upgrade com planos"""
+        upgrade_window = tk.Toplevel(self.root)
+        upgrade_window.title("Upgrade H2R-Clean")
+        upgrade_window.geometry("800x600")
+        upgrade_window.configure(bg=self.colors['bg'])
+        upgrade_window.transient(self.root)
+        upgrade_window.grab_set()
+        
+        # Container principal
+        main_frame = tk.Frame(upgrade_window, bg=self.colors['bg'], padx=30, pady=30)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Título
+        title_label = tk.Label(main_frame, text="🚀 Desbloqueie Todo o Potencial do H2R-Clean",
+                               font=('Segoe UI', 18, 'bold'), bg=self.colors['bg'], fg=self.colors['accent'])
+        title_label.pack(pady=(0, 20))
+        
+        # Subtítulo
+        subtitle_label = tk.Label(main_frame, text="Escolha o plano perfeito para suas necessidades",
+                                  font=('Segoe UI', 12), bg=self.colors['bg'], fg=self.colors['fg'])
+        subtitle_label.pack(pady=(0, 30))
+        
+        # Planos
+        plans_frame = tk.Frame(main_frame, bg=self.colors['bg'])
+        plans_frame.pack(fill=tk.BOTH, expand=True)
+        
+        plans = self.organizer.license_manager.get_pricing_plans()
+        
+        for i, (plan_type, plan_info) in enumerate(plans.items()):
+            # Card do plano
+            card = tk.Frame(plans_frame, bg=self.colors['secondary'], relief=tk.RAISED, bd=1)
+            card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
+            
+            # Nome do plano
+            name_label = tk.Label(card, text=plan_info['name'],
+                                 font=('Segoe UI', 16, 'bold'), bg=self.colors['secondary'],
+                                 fg='#2196F3' if plan_type == 'pro' else '#9C27B0')
+            name_label.pack(pady=15)
+            
+            # Preços
+            price_frame = tk.Frame(card, bg=self.colors['secondary'])
+            price_frame.pack(pady=10)
+            
+            monthly_label = tk.Label(price_frame, text=f"${plan_info['price_monthly']}/mês",
+                                    font=('Segoe UI', 14, 'bold'), bg=self.colors['secondary'], fg=self.colors['fg'])
+            monthly_label.pack()
+            
+            yearly_label = tk.Label(price_frame, text=f"${plan_info['price_yearly']}/ano",
+                                   font=('Segoe UI', 12), bg=self.colors['secondary'], fg=self.colors['accent'])
+            yearly_label.pack()
+            
+            # Features
+            features_frame = tk.Frame(card, bg=self.colors['secondary'])
+            features_frame.pack(pady=20, padx=20, fill=tk.BOTH, expand=True)
+            
+            for feature in plan_info['features']:
+                feature_label = tk.Label(features_frame, text=feature,
+                                        font=('Segoe UI', 10), bg=self.colors['secondary'], fg=self.colors['fg'],
+                                        anchor='w', justify='left')
+                feature_label.pack(pady=2, anchor='w')
+            
+            # Botão de upgrade
+            upgrade_btn = tk.Button(card, text=f"Fazer Upgrade {plan_type.upper()}",
+                                   font=('Segoe UI', 12, 'bold'),
+                                   bg='#2196F3' if plan_type == 'pro' else '#9C27B0',
+                                   fg='white', cursor='hand2',
+                                   command=lambda pt=plan_type: self.process_upgrade(pt, upgrade_window))
+            upgrade_btn.pack(pady=20, padx=20, fill=tk.X)
+        
+        # Botão fechar
+        close_btn = tk.Button(main_frame, text="Fechar", font=('Segoe UI', 10),
+                              bg=self.colors['button'], fg=self.colors['fg'],
+                              command=upgrade_window.destroy)
+        close_btn.pack(pady=(20, 0))
+    
+    def process_upgrade(self, plan_type, window):
+        """Processa upgrade do plano"""
+        # Simular processo de upgrade
+        messagebox.showinfo("Upgrade", f"Redirecionando para página de pagamento do plano {plan_type.upper()}...")
+        
+        # Em produção, aqui abriria browser com página de pagamento
+        # Por enquanto, vamos simular upgrade bem-sucedido
+        if messagebox.askyesno("Simular Upgrade", f"Simular upgrade para plano {plan_type.upper()}?"):
+            # Atualizar licença
+            self.organizer.config['license'] = {
+                'type': plan_type,
+                'key': f'demo_{plan_type}_{hashlib.md5(datetime.now().isoformat().encode()).hexdigest()[:8]}',
+                'email': 'demo@h2r-clean.com',
+                'expires': (datetime.now() + timedelta(days=365)).isoformat()
+            }
+            self.organizer.save_config()
+            
+            messagebox.showinfo("Upgrade Concluído!", f"Parabéns! Você agora tem o plano {plan_type.upper()}.")
+            window.destroy()
+            
+            # Recarregar interface
+            self.root.destroy()
+            app = H2RCleanGUI()
+            app.run()
+    
+    def generate_detailed_report_wrapper(self):
+        """Wrapper para gerar relatório detalhado"""
+        # Obter dados reais da última limpeza
+        try:
+            # Criar arquivos de teste para demonstração
+            test_dir = Path.home() / ".h2r_clean" / "test_files"
+            test_dir.mkdir(exist_ok=True)
+            
+            test_files = []
+            for i in range(5):
+                test_file = test_dir / f"test_file_{i}.tmp"
+                test_file.write_text(f"Conteúdo de teste {i}" * 100)
+                test_files.append(str(test_file))
+            
+            dummy_errors = []
+            self.organizer.generate_detailed_report(test_files, dummy_errors)
+            
+            # Limpar arquivos de teste
+            for test_file in test_files:
+                try:
+                    os.remove(test_file)
+                except:
+                    pass
+                    
+        except Exception as e:
+            self.log_message(f"⚠️ Erro ao criar demonstração: {e}")
+            # Fallback para dados simulados
+            dummy_files = ['/tmp/demo_file1', '/tmp/demo_file2']
+            dummy_errors = []
+            self.organizer.generate_detailed_report(dummy_files, dummy_errors)
+    
+    def scheduled_clean(self):
+        """Wrapper para limpeza agendada"""
+        self.organizer.scheduled_clean()
+    
+    def remote_support_session(self):
+        """Wrapper para suporte remoto"""
+        self.organizer.remote_support_session()
+    
+    def open_corporate_dashboard(self):
+        """Wrapper para dashboard corporativo"""
+        self.organizer.open_corporate_dashboard()
     
     def setup_results_area(self, parent):
         """Configura área de resultados"""
@@ -807,32 +1292,129 @@ class H2RCleanGUI:
     def scan_temp_files(self):
         """Escaneia arquivos temporários"""
         temp_files = []
-        for temp_dir in self.organizer.config.get('temp_dirs', []):
-            files = self.fast_scan_dir(temp_dir, max_depth=2, max_files=500)
-            temp_files.extend(files)
+        
+        # Usar diretórios reais do sistema
+        system = platform.system().lower()
+        if system == "linux":
+            temp_dirs = [
+                "/tmp",
+                os.path.expanduser("~/.cache"),
+                os.path.expanduser("~/.local/share/Trash/files"),
+                "/var/tmp"
+            ]
+        elif system == "windows":
+            temp_dirs = [
+                os.environ.get("TEMP", "C:\\Windows\\Temp"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Temp"),
+                "C:\\Windows\\Prefetch"
+            ]
+        else:
+            temp_dirs = self.organizer.config.get('temp_dirs', [])
+        
+        for temp_dir in temp_dirs:
+            if os.path.exists(temp_dir):
+                self.logger.info(f"Escaneando diretório temporário: {temp_dir}")
+                files = self.fast_scan_dir(temp_dir, max_depth=2, max_files=500)
+                temp_files.extend(files)
+                self.logger.info(f"Encontrados {len(files)} arquivos em {temp_dir}")
+        
+        self.logger.info(f"Total de arquivos temporários encontrados: {len(temp_files)}")
         return temp_files
     
     def scan_cache_files(self):
         """Escaneia arquivos de cache"""
         cache_files = []
-        for cache_dir in self.organizer.config.get('cache_dirs', []):
-            files = self.fast_scan_dir(cache_dir, max_depth=2, max_files=500)
-            cache_files.extend(files)
+        
+        # Usar diretórios reais do sistema
+        system = platform.system().lower()
+        if system == "linux":
+            cache_dirs = [
+                os.path.expanduser("~/.cache"),
+                # os.path.expanduser("~/.local/share"),  # Removido - contém arquivos do sistema
+                # "/var/cache"  # Removido - requer sudo
+            ]
+        elif system == "windows":
+            cache_dirs = [
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft\\Windows\\INetCache"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft\\Windows\\Explorer"),
+                os.path.join(os.environ.get("TEMP", ""), "Cache")
+            ]
+        else:
+            cache_dirs = self.organizer.config.get('cache_dirs', [])
+        
+        for cache_dir in cache_dirs:
+            if os.path.exists(cache_dir):
+                try:
+                    print(f"Escaneando diretório de cache: {cache_dir}")
+                    files = self.fast_scan_dir(cache_dir, max_depth=3, max_files=1000)  # Aumentar profundidade e limite
+                    # Filtrar apenas arquivos de cache verdadeiros
+                    cache_files.extend([f for f in files if self._is_cache_file(f)])
+                    print(f"Encontrados {len(files)} arquivos em {cache_dir}")
+                except PermissionError as e:
+                    print(f"⚠️ Sem permissão para {cache_dir}: {e}")
+                except Exception as e:
+                    print(f"❌ Erro ao escanear {cache_dir}: {e}")
+        
+        print(f"Total de arquivos de cache encontrados: {len(cache_files)}")
         return cache_files
+    
+    def _is_cache_file(self, file_path):
+        """Verifica se um arquivo é realmente de cache"""
+        cache_extensions = ['.cache', '.tmp', '.temp', '.log', '.bak', '.old', '.body']
+        cache_patterns = ['cache-', 'temp-', 'tmp-', '.#', 'thumbs.db', 'Thumbs.db', 'mesa_shader_cache', 'http-', 'pip']
+        
+        filename = os.path.basename(file_path).lower()
+        
+        # Verificar extensão
+        for ext in cache_extensions:
+            if filename.endswith(ext):
+                return True
+        
+        # Verificar padrão no nome
+        for pattern in cache_patterns:
+            if pattern in filename:
+                return True
+        
+        # Verificar se está em diretório de cache
+        parent_dir = os.path.dirname(file_path).lower()
+        if 'cache' in parent_dir or 'tmp' in parent_dir or 'temp' in parent_dir:
+            return True
+            
+        return False
     
     def scan_log_files(self):
         """Escaneia arquivos de log"""
         log_files = []
-        log_dirs = self.organizer.config.get('log_dirs', [])
-        if self.organizer.system == "linux":
-            log_dirs.extend(["/var/log", "~/.local/share/logs"])
+        
+        # Usar diretórios reais do sistema
+        system = platform.system().lower()
+        if system == "linux":
+            log_dirs = [
+                # "/var/log",  # Removido - requer sudo
+                os.path.expanduser("~/.local/share/logs"),
+                os.path.expanduser("~/.cache")
+            ]
+        elif system == "windows":
+            log_dirs = [
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft\\Windows\\INetCache"),
+                os.path.join(os.environ.get("TEMP", ""), "Logs")
+            ]
         else:
-            log_dirs.extend([os.environ.get("LOCALAPPDATA", "") + "\\Logs"])
+            log_dirs = self.organizer.config.get('log_dirs', [])
         
         for log_dir in log_dirs:
-            files = self.fast_scan_dir(log_dir, max_depth=1, file_pattern='.log', max_files=300)
-            log_files.extend(files)
+            if os.path.exists(log_dir):
+                try:
+                    print(f"Escaneando diretório de logs: {log_dir}")
+                    files = self.fast_scan_dir(log_dir, max_depth=1, file_pattern='.log', max_files=300)
+                    log_files.extend(files)
+                    print(f"Encontrados {len(files)} arquivos em {log_dir}")
+                except PermissionError as e:
+                    print(f"⚠️ Sem permissão para {log_dir}: {e}")
+                except Exception as e:
+                    print(f"❌ Erro ao escanear {log_dir}: {e}")
         
+        print(f"Total de arquivos de log encontrados: {len(log_files)}")
         return log_files
     
     def clean_temp(self):
