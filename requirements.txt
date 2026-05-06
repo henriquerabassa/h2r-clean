@@ -1,0 +1,12 @@
+# File Organizer - Dependências Python
+# Versão mínima: Python 3.7+
+
+# Biblioteca padrão (não precisa instalar)
+# - os, sys, shutil, platform, time, logging
+# - pathlib, datetime, tkinter, threading, json
+
+# Dependências opcionais para funcionalidades avançadas
+# O aplicativo funciona sem estas dependências, mas com recursos limitados
+Pillow>=9.0.0          # Para criação de ícones e manipulação de imagens
+psutil>=5.8.0          # Para informações detalhadas do sistema (opcional)
+requests>=2.28.0       # Para futuras funcionalidades de rede (opcional)
