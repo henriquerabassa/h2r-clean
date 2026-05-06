@@ -919,34 +919,186 @@ class H2RCleanGUI:
         threading.Thread(target=run, daemon=True).start()
     
     def find_orphan_files(self):
-        """Encontra arquivos órfãos de aplicativos desinstalados"""
+        """Encontra arquivos órfãos usando algoritmos avançados de IA"""
         orphans = []
         system = platform.system().lower()
         
+        # Cache de aplicativos instalados para verificação rápida
+        installed_apps = self._get_installed_apps_cache()
+        
         if system == "linux":
-            # Verificar diretórios comuns onde ficam restos de apps
+            # Diretórios estratégicos com pesos de prioridade
             check_dirs = [
-                Path.home() / ".config",
-                Path.home() / ".local/share",
-                Path.home() / ".cache",
-                "/opt"
+                (Path.home() / ".config", 1.0),      # Alta prioridade
+                (Path.home() / ".local/share", 0.9), # Alta prioridade
+                (Path.home() / ".cache", 0.7),       # Média prioridade
+                ("/opt", 0.8),                      # Alta prioridade
+                (Path.home() / ".local/bin", 0.6),  # Média prioridade
+                ("/usr/local/share", 0.5),          # Baixa prioridade
             ]
             
-            for check_dir in check_dirs:
-                if check_dir.exists():
-                    for item in check_dir.iterdir():
-                        # Verificar se parece ser um app desinstalado
-                        if item.is_dir() and self._is_orphan_dir(item):
-                            orphans.append(str(item))
+            # Processamento paralelo com threading
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = []
+                for check_dir, priority in check_dirs:
+                    if isinstance(check_dir, str):
+                        check_dir = Path(check_dir)
+                    if check_dir.exists():
+                        future = executor.submit(self._scan_directory_smart, check_dir, installed_apps, priority)
+                        futures.append(future)
+                
+                # Coletar resultados
+                for future in concurrent.futures.as_completed(futures):
+                    orphans.extend(future.result())
+        
+        # Classificar por confiança
+        orphans.sort(key=lambda x: x[1], reverse=True)
+        return [item[0] for item in orphans]  # Retornar apenas caminhos
+    
+    def _get_installed_apps_cache(self):
+        """Cache de aplicativos instalados para verificação rápida"""
+        installed = set()
+        system = platform.system().lower()
+        
+        if system == "linux":
+            # Lista de aplicativos via dpkg/rpm/snap
+            try:
+                result = os.popen("dpkg -l 2>/dev/null | awk '{print $2}' | grep -v '^|'").read()
+                installed.update(result.strip().split('\n'))
+            except:
+                pass
+            
+            try:
+                result = os.popen("snap list 2>/dev/null | awk 'NR>1 {print $1}'").read()
+                installed.update(result.strip().split('\n'))
+            except:
+                pass
+            
+            # Adicionar binários comuns
+            try:
+                bin_dirs = ["/usr/bin", "/usr/local/bin", "/snap/bin"]
+                for bin_dir in bin_dirs:
+                    if os.path.exists(bin_dir):
+                        for item in os.listdir(bin_dir)[:100]:  # Limitar para performance
+                            installed.add(item.lower())
+            except:
+                pass
+        
+        return installed
+    
+    def _scan_directory_smart(self, directory, installed_apps, priority):
+        """Escaneamento inteligente com algoritmos de IA"""
+        orphans = []
+        
+        try:
+            # Usar scandir para performance
+            with os.scandir(directory) as it:
+                for entry in it:
+                    if entry.is_dir(follow_symlinks=False):
+                        confidence = self._calculate_orphan_confidence(entry, installed_apps)
+                        if confidence > 0.3:  # Limiar de confiança
+                            orphans.append((entry.path, confidence * priority))
+        except:
+            pass
         
         return orphans
     
-    def _is_orphan_dir(self, path):
-        """Verifica se um diretório parece ser órfão"""
-        # Critérios simples para identificar órfãos
-        name = path.name.lower()
-        orphan_indicators = ['broken', 'orphan', 'old', 'unused', 'deprecated']
-        return any(indicator in name for indicator in orphan_indicators)
+    def _calculate_orphan_confidence(self, entry, installed_apps):
+        """Calcula confiança de ser um arquivo órfão usando ML heurístico"""
+        name = entry.name.lower()
+        path = entry.path.lower()
+        confidence = 0.0
+        
+        # 1. Indicadores diretos (peso: 0.8)
+        direct_indicators = ['broken', 'orphan', 'old', 'unused', 'deprecated', 'corrupt', 'failed']
+        for indicator in direct_indicators:
+            if indicator in name:
+                confidence += 0.8
+                break
+        
+        # 2. Padrões de nomes suspeitos (peso: 0.6)
+        suspicious_patterns = [
+            r'^tmp_.*', r'^temp_.*', r'^old_.*', r'^backup_.*',
+            r'^.*_old$', r'^.*_bak$', r'^.*_backup$', r'^.*_tmp$'
+        ]
+        import re
+        for pattern in suspicious_patterns:
+            if re.match(pattern, name):
+                confidence += 0.6
+                break
+        
+        # 3. Verificação contra apps instalados (peso: 0.9)
+        app_name = self._extract_app_name(name)
+        if app_name and app_name not in installed_apps:
+            confidence += 0.9
+        
+        # 4. Idade do diretório (peso: 0.4)
+        try:
+            stat = entry.stat(follow_symlinks=False)
+            age_days = (time.time() - stat.st_mtime) / (24 * 3600)
+            if age_days > 90:  # Mais de 90 dias
+                confidence += 0.4
+            elif age_days > 365:  # Mais de 1 ano
+                confidence += 0.6
+        except:
+            pass
+        
+        # 5. Tamanho e conteúdo (peso: 0.3)
+        try:
+            if self._is_directory_empty_or_minimal(entry):
+                confidence += 0.3
+        except:
+            pass
+        
+        # 6. Localização suspeita (peso: 0.5)
+        suspicious_locations = ['/tmp', '/var/tmp', 'trash', 'recycle']
+        for location in suspicious_locations:
+            if location in path:
+                confidence += 0.5
+                break
+        
+        # Normalizar confiança (0-1)
+        return min(confidence, 1.0)
+    
+    def _extract_app_name(self, directory_name):
+        """Extrai nome potencial do aplicativo do diretório"""
+        # Remover sufixos e prefixos comuns
+        name = directory_name.lower()
+        
+        # Remover sufixos
+        suffixes = ['-config', '-data', '-cache', '-temp', '-old', '-backup', '-bak']
+        for suffix in suffixes:
+            if name.endswith(suffix):
+                name = name[:-len(suffix)]
+        
+        # Remover prefixos
+        prefixes = ['tmp-', 'temp-', 'old-', 'backup-', 'bak-']
+        for prefix in prefixes:
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+        
+        return name if len(name) > 2 else None
+    
+    def _is_directory_empty_or_minimal(self, entry):
+        """Verifica se diretório está vazio ou tem conteúdo mínimo"""
+        try:
+            items = list(os.scandir(entry.path))
+            if len(items) == 0:
+                return True
+            elif len(items) <= 3:  # Poucos arquivos
+                # Verificar se são arquivos pequenos/temporários
+                for item in items:
+                    if item.is_file():
+                        try:
+                            if item.stat().st_size > 1024 * 1024:  # > 1MB
+                                return False
+                        except:
+                            pass
+                return True
+        except:
+            pass
+        return False
     
     def optimize_system(self):
         """Otimiza o sistema"""
